@@ -18,7 +18,7 @@ SimpleKalmanFilter simpleKalmanFilter3(2, 2, 0.01);
 
 // USED PINS 2,3,4,5,6,7,9,12,13
 const int IGNITION_RELAY_PIN = 7;
-// const int HIGH_LOW_SPEED_PIN = ;
+const int HIGH_LOW_SPEED_PIN = 11;
 const int FORWARD_GEARBOX_PIN = 13;
 const int BACKWARD_GEARBOX_PIN = 12;
 const int RPWM_Output = 5; // Arduino PWM output pin 5; connect to IBT-2 pin 1 (RPWM)
@@ -27,7 +27,7 @@ const int LPWM_Output = 6; // Arduino PWM output pin 6; connect to IBT-2 pin 2 (
 bool isOnboardControlEnabled = false;
 int onBoardGoForwardSwitchState = 1;              // Inverted value. 0 - true, 1 - false
 int onBoardGoBackwardSwitchState = 1;             // Inverted value. 0 - true, 1 - false
-int onBoardHighLowSpeedSwitchState = 1;           // Inverted value. 0 - true, 1 - false
+int onBoardHighLowSpeedSwitchState = 0;           // Inverted value. 0 - true, 1 - false
 
 // Variables for movement with onboarding control
 int motorSpeed = 511;         // Current motor speed (0-255)
@@ -35,8 +35,11 @@ const int speedStep = 10;    // Step increment for speed
 const int speedStepStopping = 20;    // Step increment for speed
 const unsigned long interval = 50; // Time interval for ramp-up (ms)
 unsigned long lastUpdate = 0; // Tracks the last time motor speed was updated
-int MAX_SPEED_FORWARD = 200; // 0 - maximum, 511 - stop
-int MAX_SPEED_BACKWARD = 600; // 1023 - maximum, 511 - stop
+
+const int MAX_SPEED_FORWARD_INIT = 300;
+const int MAX_SPEED_BACKWARD_INIT = 600;
+int MAX_SPEED_FORWARD = 511; // 0 - maximum, 511 - stop
+int MAX_SPEED_BACKWARD = 511; // 1023 - maximum, 511 - stop
 int STOP_VALUE = 511;
 
 const long SERIAL_REFRESH_TIME = 100;
@@ -108,7 +111,7 @@ void setup() {
   pinMode(IGNITION_RELAY_PIN, INPUT_PULLUP);
   pinMode(IGNITION_RELAY_PIN, OUTPUT);
 
-  // pinMode(HIGH_LOW_SPEED_PIN, INPUT_PULLUP);
+  pinMode(HIGH_LOW_SPEED_PIN, INPUT_PULLUP);
   pinMode(FORWARD_GEARBOX_PIN, INPUT_PULLUP);
   pinMode(BACKWARD_GEARBOX_PIN, INPUT_PULLUP);
 
@@ -124,8 +127,18 @@ void loop() {
 
   onBoardGoForwardSwitchState = digitalRead(FORWARD_GEARBOX_PIN);
   onBoardGoBackwardSwitchState = digitalRead(BACKWARD_GEARBOX_PIN);
-  // onBoardHighLowSpeedSwitchState = digitalRead(HIGH_LOW_SPEED_PIN);
+  onBoardHighLowSpeedSwitchState = digitalRead(HIGH_LOW_SPEED_PIN);
   
+  // Swith speed
+  Serial.println(onBoardHighLowSpeedSwitchState);
+  if (onBoardHighLowSpeedSwitchState == 1) {
+    MAX_SPEED_FORWARD = 50; // 0 - maximum, 511 - stop
+    MAX_SPEED_BACKWARD = 700;
+  } else {
+    MAX_SPEED_FORWARD = MAX_SPEED_FORWARD_INIT;
+    MAX_SPEED_BACKWARD = MAX_SPEED_BACKWARD_INIT;
+  }
+
   // read the values from our RC Receiver
   rc_read_values();
 
