@@ -16,6 +16,29 @@ SimpleKalmanFilter simpleKalmanFilter1(2, 2, 0.007);
 SimpleKalmanFilter simpleKalmanFilter2(2, 2, 0.003);
 SimpleKalmanFilter simpleKalmanFilter3(2, 2, 0.01);
 
+// USED PINS 2,3,4,5,6,7,9,12,13
+const int IGNITION_RELAY_PIN = 7;
+// const int HIGH_LOW_SPEED_PIN = ;
+const int FORWARD_GEARBOX_PIN = 13;
+const int BACKWARD_GEARBOX_PIN = 12;
+const int RPWM_Output = 5; // Arduino PWM output pin 5; connect to IBT-2 pin 1 (RPWM)
+const int LPWM_Output = 6; // Arduino PWM output pin 6; connect to IBT-2 pin 2 (LPWM)
+
+bool isOnboardControlEnabled = false;
+int onBoardGoForwardSwitchState = 1;              // Inverted value. 0 - true, 1 - false
+int onBoardGoBackwardSwitchState = 1;             // Inverted value. 0 - true, 1 - false
+int onBoardHighLowSpeedSwitchState = 1;           // Inverted value. 0 - true, 1 - false
+
+// Variables for movement with onboarding control
+int motorSpeed = 511;         // Current motor speed (0-255)
+const int speedStep = 10;    // Step increment for speed
+const int speedStepStopping = 20;    // Step increment for speed
+const unsigned long interval = 50; // Time interval for ramp-up (ms)
+unsigned long lastUpdate = 0; // Tracks the last time motor speed was updated
+int MAX_SPEED_FORWARD = 200; // 0 - maximum, 511 - stop
+int MAX_SPEED_BACKWARD = 600; // 1023 - maximum, 511 - stop
+int STOP_VALUE = 511;
+
 const long SERIAL_REFRESH_TIME = 100;
 long refresh_time;
 
@@ -25,10 +48,7 @@ int previousPosServo1 = 0;
 
 int moveCarValue = 512;
 
-int RPWM_Output = 5; // Arduino PWM output pin 5; connect to IBT-2 pin 1 (RPWM)
-int LPWM_Output = 6; // Arduino PWM output pin 6; connect to IBT-2 pin 2 (LPWM)
-
-int deltaSteeringAngle = 9;
+int deltaSteeringAngle = 0;
 int deltaMovement = 0;
 
 enum position_channel7 {INVALID, RIGHT, LEFT, CENTER};
@@ -80,8 +100,17 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(RC_CH2_INPUT), READ_RC2, CHANGE);
 
   servoMotor1.attach(SERVOMOTOR_PIN);
+
+  pinMode(RPWM_Output, INPUT_PULLUP);
   pinMode(RPWM_Output, OUTPUT);
+  pinMode(LPWM_Output, INPUT_PULLUP);
   pinMode(LPWM_Output, OUTPUT);
+  pinMode(IGNITION_RELAY_PIN, INPUT_PULLUP);
+  pinMode(IGNITION_RELAY_PIN, OUTPUT);
+
+  // pinMode(HIGH_LOW_SPEED_PIN, INPUT_PULLUP);
+  pinMode(FORWARD_GEARBOX_PIN, INPUT_PULLUP);
+  pinMode(BACKWARD_GEARBOX_PIN, INPUT_PULLUP);
 
   initialState();
 }
@@ -92,6 +121,10 @@ void initialState() {
 //==============================================
 
 void loop() {
+
+  onBoardGoForwardSwitchState = digitalRead(FORWARD_GEARBOX_PIN);
+  onBoardGoBackwardSwitchState = digitalRead(BACKWARD_GEARBOX_PIN);
+  // onBoardHighLowSpeedSwitchState = digitalRead(HIGH_LOW_SPEED_PIN);
   
   // read the values from our RC Receiver
   rc_read_values();
@@ -119,21 +152,26 @@ void loop() {
     switch (switchPosition)
     {
       case LEFT: 
-        // LEFT
+        // LEFT: Disable movement
         servoMotor1.detach();
         estimatedRCValue1 = 0;
         estimatedRCValue2 = 0;
         ignition = false;
         stopMovement();
+        ignition_car(0);
         delay(50); break;
       case CENTER:
-        // CENTER
+        // CENTER: RC Controlled
         ignition = true;
+        isOnboardControlEnabled = false;
+        ignition_car(1);
         servoMotor1.attach(SERVOMOTOR_PIN);
         delay(50); break;
       case RIGHT: 
-        // RIGHT
+        // RIGHT: Onboard controlled
         ignition = true;
+        isOnboardControlEnabled = true;
+        ignition_car(1);
         servoMotor1.detach();
         delay(50); break;
       
@@ -144,8 +182,8 @@ void loop() {
   // ------------------------------------------
 
   // output our values to the serial port in a format the plotter can use
-  Serial.print("STEERING: ");
-  Serial.print(estimatedRCValue1);  Serial.print(" : ");
+  // Serial.print("STEERING: ");
+  // Serial.print(estimatedRCValue1);  Serial.print(" : ");
 
   // ------------------------------------------
   posServo1 = map(estimatedRCValue1, 1525, 1610, 0, 180);
@@ -155,15 +193,7 @@ void loop() {
   if (posServo1 <= 0) {
     posServo1 = 0;
   }
-  Serial.print(posServo1);  Serial.print(" ----- ");
-
-  moveCarValue = map(estimatedRCValue2, 1520, 1620, 0, 1023);
-  if (moveCarValue > 1023) {
-    moveCarValue = 1023;
-  }
-  if (moveCarValue <= 0) {
-    moveCarValue = 0;
-  }
+  // Serial.print(posServo1);  Serial.print(" ----- ");
 
   // ------------------------------------------
   // Steering
@@ -171,17 +201,82 @@ void loop() {
 
   // ------------------------------------------
   // Movement
-  if (ignition == true) {
-    if ((estimatedRCValue2 >= 1565) && (estimatedRCValue2 <= 1575)) {
-      stopMovement();
 
-    } else if (estimatedRCValue2 > 1575) {
-      // reverse rotation
-      moveBackward(); 
+  if (isOnboardControlEnabled == false) {
+    Serial.print(" ");
+    Serial.print("RC CONTROL");  Serial.print(" ");
 
-    } else if (estimatedRCValue2 <= 1565) {
-      // forward rotation
-      moveForward();
+    moveCarValue = map(estimatedRCValue2, 1520, 1620, 0, 1023);
+    if (moveCarValue > 1023) {
+      moveCarValue = 1023;
+    }
+    if (moveCarValue <= 0) {
+      moveCarValue = 0;
+    }
+
+    if (ignition == true) {
+      if ((estimatedRCValue2 >= 1565) && (estimatedRCValue2 <= 1575)) {
+        stopMovement();
+
+      } else if (estimatedRCValue2 > 1575) {
+        // reverse rotation
+        moveBackward(); 
+
+      } else if ((estimatedRCValue2 <= 1565) && (moveCarValue != 0)) {
+        // forward rotation
+        moveForward();
+      }
+    }
+  } else {
+    // Onboard controls movement
+    Serial.print(" ");
+    Serial.print("ONBOARD");  Serial.print(" ");
+    if (ignition == true) {
+      if (onBoardGoForwardSwitchState == 0) {
+        unsigned long currentTime = millis(); // Get the current time
+        if (currentTime - lastUpdate >= interval) { // Check if interval has passed
+          lastUpdate = currentTime; // Update the last update time
+          if (motorSpeed > MAX_SPEED_FORWARD) {
+            motorSpeed -= speedStep; // Increment motor speed
+          } else {
+            motorSpeed = MAX_SPEED_FORWARD;
+          }
+        }
+        moveCarValue = motorSpeed;
+        moveForward();
+      } else if (onBoardGoForwardSwitchState == 1 && onBoardGoBackwardSwitchState == 1 && motorSpeed != STOP_VALUE) {
+        // Slowly stop
+        unsigned long currentTime = millis(); // Get the current time
+        if (currentTime - lastUpdate >= interval) { // Check if interval has passed
+          lastUpdate = currentTime; // Update the last update time
+          if (motorSpeed <= STOP_VALUE) {
+            motorSpeed += speedStepStopping; // Increment motor speed
+          } else {
+            motorSpeed = STOP_VALUE;
+          }
+        }
+        if (motorSpeed > STOP_VALUE) {
+          motorSpeed = STOP_VALUE;
+        }
+        moveCarValue = motorSpeed;
+        moveForward();
+
+      } else if (onBoardGoBackwardSwitchState == 0) {
+        unsigned long currentTime = millis(); // Get the current time
+        if (currentTime - lastUpdate >= interval) { // Check if interval has passed
+          lastUpdate = currentTime; // Update the last update time
+          if (motorSpeed < MAX_SPEED_BACKWARD) {
+            motorSpeed += speedStep; // Increment motor speed
+          } else {
+            motorSpeed = MAX_SPEED_BACKWARD;
+          }
+        }
+        moveCarValue = motorSpeed;
+        moveBackward();
+      } else {
+        stopMovement();
+        motorSpeed = STOP_VALUE;
+      }
     }
   }
 
@@ -218,6 +313,14 @@ void moveBackward() {
   isMovingBackward = true;
   isMovingForward = false;
   Serial.print(reversePWM);
+}
+
+void ignition_car(int state) {
+  if (state == 1) {
+    digitalWrite(IGNITION_RELAY_PIN, HIGH);
+  } else {
+    digitalWrite(IGNITION_RELAY_PIN, LOW);
+  }
 }
 
 // Thee functions are called by the interrupts. We send them all to the same place to measure the pulse width
